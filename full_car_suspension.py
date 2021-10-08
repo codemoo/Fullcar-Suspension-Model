@@ -1,6 +1,7 @@
 import numpy as np
 from scipy.signal import cont2discrete
 import casadi as ca
+import copy
 
 class FullCarSuspension:
 
@@ -43,6 +44,10 @@ class FullCarSuspension:
         self.n_states = 14
         self.n_control = 4
         self.Ts = 0.01
+
+        self.X = None
+        self.obs = None
+        self.setX([0,0,0,0,0,0,0,0,0,0,0,0,0,0])
 
         A = np.array([
             [0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
@@ -131,22 +136,92 @@ class FullCarSuspension:
         self.Ad = ca.reshape(sysd[0], self.n_states, self.n_states)
         self.Bd = ca.reshape(sysd[1], self.n_states, self.n_control)
 
-    def cal(self, x, u, w=None):
+    def cal(self, u, w=None, x=None):
+        if x is None:
+            x = self.X
+
         if w is None:
             x_next = ca.mtimes(self.Ad, x) + ca.mtimes(self.Bd, u)
         else:
             x_next = ca.mtimes(self.Ad, x) + ca.mtimes(ca.mtimes(self.Bd, u), w)
 
         #[z dz phi dphi theta dtheta z_LF dz_LF z_RF dz_RF z_LR dz_LR z_RR dz_RR]
-        return x_next
+        return self.setX(x_next)
+
+    def setX(self, x):
+        if len(x) != self.n_states:
+            return None
+
+        if self.obs is None:
+            old_obs = None
+        else:
+            old_obs = copy.deepcopy(self.obs)
+
+        self.X = {
+            "z": x[0],
+            "dz":x[1],
+            "phi":x[2],
+            "dphi":x[3],
+            "theta":x[4],
+            "dtheta":x[5],
+            "z_tfl":x[6],
+            "dz_tfl":x[7],
+            "z_tfr":x[8],
+            "dz_tfr":x[9],
+            "z_trl":x[10],
+            "dz_trl":x[11],
+            "z_trr":x[12],
+            "dz_trr":x[13]
+        }
+
+        L = self.L
+        W = self.W
+
+        self.obs = self.X
+        
+        self.obs["z_fl"] =  W/2*x[3]*ca.sin(x[2]) - L*ca.sin(x[4]) + x[1]
+        self.obs["z_fr"] = -W/2*x[3]*ca.sin(x[2]) - L*ca.sin(x[4]) + x[1]
+        self.obs["z_rl"] =  W/2*x[3]*ca.sin(x[2]) + L*ca.sin(x[4]) + x[1]
+        self.obs["z_rr"] = -W/2*x[3]*ca.sin(x[2]) + L*ca.sin(x[4]) + x[1]
+
+        self.obs["dz_fl"] =  W/2*x[3]*ca.cos(x[2]) - L/2*x[5]*ca.cos(x[4]) + x[1]
+        self.obs["dz_fr"] = -W/2*x[3]*ca.cos(x[2]) - L/2*x[5]*ca.cos(x[4]) + x[1]
+        self.obs["dz_rl"] =  W/2*x[3]*ca.cos(x[2]) + L/2*x[5]*ca.cos(x[4]) + x[1]
+        self.obs["dz_rr"] = -W/2*x[3]*ca.cos(x[2]) + L/2*x[5]*ca.cos(x[4]) + x[1]
+
+        if old_obs is None:
+            # Initial Condition
+            self.obs["ddz"]     = 0
+            self.obs["ddz_fl"]  = 0
+            self.obs["ddz_fr"]  = 0
+            self.obs["ddz_rl"]  = 0
+            self.obs["ddz_rr"]  = 0
+            self.obs["ddz_tfl"] = 0
+            self.obs["ddz_tfr"] = 0
+            self.obs["ddz_trl"] = 0
+            self.obs["ddz_trr"] = 0
+            
+        else:
+            # TODO: Analytic
+            self.obs["ddz"]     = (self.obs["dz"]     - old_obs["dz"])  / self.Ts
+            self.obs["ddz_fl"]  = (self.obs["dz_fl"]  - old_obs["dz_fl"])  / self.Ts
+            self.obs["ddz_fr"]  = (self.obs["dz_fr"]  - old_obs["dz_fr"])  / self.Ts
+            self.obs["ddz_rl"]  = (self.obs["dz_rl"]  - old_obs["dz_rl"])  / self.Ts
+            self.obs["ddz_rr"]  = (self.obs["dz_rr"]  - old_obs["dz_rr"])  / self.Ts
+            self.obs["ddz_tfl"] = (self.obs["dz_tfl"] - old_obs["dz_tfl"]) / self.Ts
+            self.obs["ddz_tfr"] = (self.obs["dz_tfr"] - old_obs["dz_tfr"]) / self.Ts
+            self.obs["ddz_trl"] = (self.obs["dz_trl"] - old_obs["dz_trl"]) / self.Ts
+            self.obs["ddz_trr"] = (self.obs["dz_trr"] - old_obs["dz_trr"]) / self.Ts
+
+        return self.obs
 
     def passive(self, x):
         L = self.L
         W = self.W
 
-        delta_fl_dot = W/2*x[3]*ca.cos(x[2]) - L/2*x[5]*ca.cos(x[4]) + x[1] - x[7]
+        delta_fl_dot =  W/2*x[3]*ca.cos(x[2]) - L/2*x[5]*ca.cos(x[4]) + x[1] - x[7]
         delta_fr_dot = -W/2*x[3]*ca.cos(x[2]) - L/2*x[5]*ca.cos(x[4]) + x[1] - x[9]
-        delta_rl_dot = W/2*x[3]*ca.cos(x[2]) + L/2*x[5]*ca.cos(x[4]) + x[1] - x[11]
+        delta_rl_dot =  W/2*x[3]*ca.cos(x[2]) + L/2*x[5]*ca.cos(x[4]) + x[1] - x[11]
         delta_rr_dot = -W/2*x[3]*ca.cos(x[2]) + L/2*x[5]*ca.cos(x[4]) + x[1] - x[13]
 
         u_fl = 1000 * delta_fl_dot
@@ -155,3 +230,12 @@ class FullCarSuspension:
         u_rr = 1000 * delta_rr_dot
 
         return [u_fl,u_fr,u_rl,u_rr]
+
+if __name__ == "__main__":
+    fcs = FullCarSuspension()
+
+    x = [0,0,0,0,0,0,0,0,0,0,0,0,0,0]
+    for i in range(10):
+        u = [100,100,100,100]
+        x = fcs.cal(x, u)
+        print(x)
